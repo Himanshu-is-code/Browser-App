@@ -6,6 +6,7 @@ import android.os.Build;
 import android.util.Log;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -120,8 +121,45 @@ public final class TabManager {
                     injectPrompt(tab, queuedPrompt);
                 }
             }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    Log.e(TAG, "Main-frame load failed for " + request.getUrl()
+                            + ": " + error.getDescription());
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceResponse response) {
+                if (request.isForMainFrame() || response.getStatusCode() >= 400) {
+                    Log.e(TAG, "HTTP " + response.getStatusCode() + " for " + request.getUrl());
+                }
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                Log.e(TAG, "WebView renderer exited for " + tab.url
+                        + " (crashed=" + detail.didCrash() + ")");
+                if (tab.webView == view) {
+                    destroyWebView(tab);
+                    tab.loading = false;
+                }
+                return true;
+            }
         });
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage message) {
+                if (BuildConfig.DEBUG && message.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.e(TAG, "Page JS error at " + message.sourceId() + ":"
+                            + message.lineNumber() + " — " + message.message());
+                }
+                return true;
+            }
+        });
         tab.webView = webView;
         return webView;
     }
