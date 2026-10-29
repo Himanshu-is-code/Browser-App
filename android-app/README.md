@@ -26,5 +26,7 @@ On Windows, use `gradlew.bat assembleDebug`.
 
 - `window.CppEngine.dispatch(json)` routes create, switch, update, close, reload, and prompt commands through `MainActivity.nativeDispatchPayload` in `app/src/main/cpp/engine.cpp`.
 - `TabManager.java` owns per-tab WebViews, in-app HTTP(S) navigation, persistent WebView cookies, and prompt injection for the supported DeepSeek, Gemini, ChatGPT, and Claude domains.
+- Website WebViews are created on first selection. Inactive pages receive `WebView.onPause()` and are discarded under Android memory pressure; their current URL and vertical scroll position are restored when reopened. Android's `WebView.pauseTimers()` is process-wide, so it is only used while the whole app is backgrounded, not when switching tabs.
+- Normal WebView HTTP caching remains enabled. The app does not rewrite or block arbitrary site requests because that can break websites and sign-in flows.
 - The Java bridge also exposes `getSystemTelemetry` and `performHapticFeedback` for the existing React `cppBridge` service.
 - Prompt injection uses the loaded page's DOM and can stop working if a provider changes its page structure. The app does not disable WebView origin security or attempt injection into unrelated sites.

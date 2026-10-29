@@ -62,13 +62,22 @@ public final class TabManager {
             existing.title = title == null ? existing.title : title;
             if (!url.equals(existing.url)) {
                 existing.url = url;
-                existing.webView.loadUrl(url);
+                existing.lastScrollY = 0;
+                if (existing.webView != null) existing.webView.loadUrl(url);
             }
             return true;
         }
 
+        // Keep tab metadata only until the user selects it. WebViews are expensive
+        // and are initialized on demand in switchToTab().
+        tabs.put(id, new BrowserTab(id, title, url));
+        return true;
+    }
+
+    private WebView createWebView(BrowserTab tab) {
         WebView webView = new WebView(activity);
-        webView.setBackgroundColor(Color.WHITE);
+        // Match the light shell while a newly loaded page paints its first frame.
+        webView.setBackgroundColor(Color.rgb(243, 245, 247));
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -80,7 +89,6 @@ public final class TabManager {
             cookieManager.setAcceptThirdPartyCookies(webView, true);
         }
 
-        BrowserTab tab = new BrowserTab(id, title, url, webView);
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -102,6 +110,10 @@ public final class TabManager {
             public void onPageFinished(WebView view, String pageUrl) {
                 tab.loading = false;
                 tab.url = pageUrl;
+                if (tab.lastScrollY > 0) {
+                    int restoreScrollY = tab.lastScrollY;
+                    webView.post(() -> webView.scrollTo(0, restoreScrollY));
+                }
                 String queuedPrompt = tab.pendingPrompt;
                 if (queuedPrompt != null) {
                     tab.pendingPrompt = null;
@@ -110,9 +122,8 @@ public final class TabManager {
             }
         });
         webView.setWebChromeClient(new WebChromeClient());
-        tabs.put(id, tab);
-        webView.loadUrl(url);
-        return true;
+        tab.webView = webView;
+        return webView;
     }
 
     public boolean updateTab(String id, String url, String title) {
@@ -124,20 +135,36 @@ public final class TabManager {
         if (!normalized.matches("(?i)^https?://.*")) normalized = "https://" + normalized;
         if (!isHttpUrl(normalized)) return false;
         tab.url = normalized;
-        tab.webView.loadUrl(normalized);
+        tab.lastScrollY = 0;
+        if (tab.webView != null) tab.webView.loadUrl(normalized);
         return true;
     }
 
     public boolean switchToTab(String id) {
         BrowserTab tab = tabs.get(id);
         if (tab == null) return false;
+
+        BrowserTab previous = findTab(activeTabId);
+        if (previous != null && previous != tab) pauseTab(previous);
+
+        WebView webView = tab.webView;
+        if (webView == null) {
+            webView = createWebView(tab);
+            tab.loading = true;
+            webView.loadUrl(tab.url);
+        } else {
+            webView.onResume();
+        }
+
         activeTabId = id;
-        ViewGroup parent = (ViewGroup) tab.webView.getParent();
-        if (parent != null) parent.removeView(tab.webView);
-        webHost.removeAllViews();
-        webHost.addView(tab.webView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
+        webView.setVisibility(WebView.VISIBLE);
+        ViewGroup parent = (ViewGroup) webView.getParent();
+        if (parent == null) {
+            webHost.addView(webView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        webView.bringToFront();
         shellWebView.setBackgroundColor(Color.TRANSPARENT);
         shellWebView.setVisibility(WebView.VISIBLE);
         shellWebView.evaluateJavascript(
@@ -150,6 +177,7 @@ public final class TabManager {
     public boolean reloadTab(String id) {
         BrowserTab tab = findTab(id);
         if (tab == null) return false;
+        if (tab.webView == null) return true;
         tab.webView.reload();
         return true;
     }
@@ -158,18 +186,14 @@ public final class TabManager {
         BrowserTab tab = tabs.remove(id);
         if (tab == null) return false;
         if (id.equals(activeTabId)) showShell();
-        tab.webView.stopLoading();
-        tab.webView.setWebViewClient(null);
-        tab.webView.setWebChromeClient(null);
-        ViewGroup parent = (ViewGroup) tab.webView.getParent();
-        if (parent != null) parent.removeView(tab.webView);
-        tab.webView.destroy();
+        destroyWebView(tab);
         return true;
     }
 
     public boolean injectPromptToTab(String id, String prompt) {
         BrowserTab tab = findTab(id);
-        if (tab == null || prompt == null || prompt.trim().isEmpty() || !supportsPromptInjection(tab.url)) {
+        if (tab == null || tab.webView == null || prompt == null || prompt.trim().isEmpty()
+                || !supportsPromptInjection(tab.url)) {
             return false;
         }
         if (tab.loading || tab.webView.getProgress() < 100) {
@@ -209,6 +233,8 @@ public final class TabManager {
     }
 
     public void showShell() {
+        BrowserTab active = findTab(activeTabId);
+        if (active != null) pauseTab(active);
         shellWebView.setVisibility(WebView.VISIBLE);
         shellWebView.setBackgroundColor(Color.rgb(243, 245, 247));
         shellWebView.evaluateJavascript(
@@ -218,17 +244,34 @@ public final class TabManager {
 
     public void flushCookiesAndPause() {
         cookieManager.flush();
-        for (BrowserTab tab : tabs.values()) tab.webView.onPause();
+        for (BrowserTab tab : tabs.values()) pauseTab(tab);
     }
 
     public void resumeTabs() {
-        for (BrowserTab tab : tabs.values()) tab.webView.onResume();
+        BrowserTab active = findTab(activeTabId);
+        for (BrowserTab tab : tabs.values()) {
+            if (tab.webView == null) continue;
+            if (tab == active && browserLayer.getVisibility() == FrameLayout.VISIBLE) {
+                tab.webView.onResume();
+                tab.webView.setVisibility(WebView.VISIBLE);
+                tab.webView.bringToFront();
+            } else {
+                pauseTab(tab);
+            }
+        }
+    }
+
+    /** Release inactive renderer state when Android reports memory pressure. */
+    public void trimMemory(int level) {
+        if (level < android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) return;
+        for (BrowserTab tab : tabs.values()) {
+            if (!tab.id.equals(activeTabId)) discardTabPage(tab);
+        }
     }
 
     public void destroy() {
         for (BrowserTab tab : tabs.values()) {
-            tab.webView.stopLoading();
-            tab.webView.destroy();
+            destroyWebView(tab);
         }
         tabs.clear();
         activeTabId = null;
@@ -238,6 +281,36 @@ public final class TabManager {
     private BrowserTab findTab(String id) {
         if (id != null && !id.isEmpty()) return tabs.get(id);
         return activeTabId == null ? null : tabs.get(activeTabId);
+    }
+
+    private void pauseTab(BrowserTab tab) {
+        if (tab.webView == null) return;
+        tab.lastScrollY = tab.webView.getScrollY();
+        // Keep its measured surface attached so switching back to a cached page
+        // does not detach and recreate its compositor layer.
+        tab.webView.setVisibility(WebView.INVISIBLE);
+        tab.webView.onPause();
+    }
+
+    private void discardTabPage(BrowserTab tab) {
+        if (tab.webView == null) return;
+        tab.lastScrollY = tab.webView.getScrollY();
+        tab.url = tab.webView.getUrl() == null ? tab.url : tab.webView.getUrl();
+        tab.pendingPrompt = null;
+        destroyWebView(tab);
+        tab.loading = false;
+    }
+
+    private void destroyWebView(BrowserTab tab) {
+        WebView webView = tab.webView;
+        if (webView == null) return;
+        webView.stopLoading();
+        webView.setWebViewClient(null);
+        webView.setWebChromeClient(null);
+        ViewGroup parent = (ViewGroup) webView.getParent();
+        if (parent != null) parent.removeView(webView);
+        webView.destroy();
+        tab.webView = null;
     }
 
     private static boolean isHttpUrl(String value) {
@@ -269,15 +342,15 @@ public final class TabManager {
         final String id;
         String title;
         String url;
-        final WebView webView;
+        WebView webView;
         boolean loading = true;
         String pendingPrompt;
+        int lastScrollY;
 
-        BrowserTab(String id, String title, String url, WebView webView) {
+        BrowserTab(String id, String title, String url) {
             this.id = id;
             this.title = title;
             this.url = url;
-            this.webView = webView;
         }
     }
 }

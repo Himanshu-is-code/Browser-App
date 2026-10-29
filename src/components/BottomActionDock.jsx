@@ -244,7 +244,7 @@ export default function BottomActionDock({ onPhotos, onCreate, overlayMode = fal
           bottom: `${expanded ? 32 : collapsedDockBottom}px`,
         }}
         transition={{ type: 'spring', stiffness: 230, damping: 28, mass: 0.8 }}
-        className="mosaic-glass fixed bottom-0 left-0 right-0 z-40 mx-auto flex max-w-[90vw] items-center justify-center overflow-hidden rounded-full p-1.5 shadow-[0_12px_32px_rgba(42,53,81,0.13),inset_0_1px_0_rgba(255,255,255,0.85)]"
+        className="mosaic-glass dock-motion-layer fixed bottom-0 left-0 right-0 z-40 mx-auto flex max-w-[90vw] items-center justify-center overflow-hidden rounded-full p-1.5 shadow-[0_12px_32px_rgba(42,53,81,0.13),inset_0_1px_0_rgba(255,255,255,0.85)]"
       >
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/35 via-white/5 to-sky-100/15" />
         <motion.div
@@ -314,7 +314,7 @@ export default function BottomActionDock({ onPhotos, onCreate, overlayMode = fal
                         aria-label={`Switch to ${tab.title}`}
                         aria-pressed={selectedTab === tab.id}
                         onClick={() => switchToTab(tab.id)}
-                        className={`mosaic-glass-control flex h-full w-full items-center justify-center overflow-hidden rounded-full border border-white/75 ${selectedTab === tab.id ? 'bg-white/75 ring-1 ring-white/90' : ''}`}
+                      className={`mosaic-glass-control flex h-full w-full items-center justify-center overflow-hidden rounded-full border border-white/75 ${selectedTab === tab.id ? 'bg-white/75 ring-1 ring-white/90' : ''}`}
                       >
                         {tab.domain ? (
                           <WebsiteIcon tab={tab} className="h-full w-full" />

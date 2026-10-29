@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
 
         FrameLayout root = new FrameLayout(this);
         browserLayer = new FrameLayout(this);
+        browserLayer.setBackgroundColor(Color.rgb(243, 245, 247));
         // Native pages sit below Android's status bar and above its gesture area;
         // the transparent React dock remains full-screen on top of this layer.
         browserLayer.setPadding(0, getStatusBarHeight(), 0, getNavigationBarHeight());
@@ -206,6 +207,9 @@ public class MainActivity extends Activity {
     protected void onPause() {
         if (shellWebView != null) shellWebView.onPause();
         if (tabManager != null) tabManager.flushCookiesAndPause();
+        // WebView's JavaScript timer pause is process-wide, so only use it while
+        // the whole app is backgrounded (never while switching between tabs).
+        if (shellWebView != null) shellWebView.pauseTimers();
         super.onPause();
     }
 
@@ -213,7 +217,22 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (shellWebView != null) shellWebView.onResume();
+        if (shellWebView != null) shellWebView.resumeTimers();
         if (tabManager != null) tabManager.resumeTabs();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (tabManager != null) tabManager.trimMemory(level);
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        if (tabManager != null) {
+            tabManager.trimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL);
+        }
     }
 
     @Override

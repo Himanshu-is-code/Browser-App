@@ -18,6 +18,11 @@
     -webkit-backdrop-filter: blur(20px) saturate(150%);
     backdrop-filter: blur(20px) saturate(150%);
   }
+
+  .dock-motion-layer {
+    backface-visibility: hidden;
+    will-change: transform, opacity;
+  }
 }
 
 :root {
