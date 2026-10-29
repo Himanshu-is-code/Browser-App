@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Image, WandSparkles, Plus, MoreHorizontal, Globe2, X, Search, ArrowUpRight } from 'lucide-react';
+import cppBridge from '../services/cppBridge';
 
 const dockItems = [
   { id: 'photos', label: 'Photos', icon: Image },
@@ -8,7 +9,7 @@ const dockItems = [
   { id: 'create', label: 'Create', icon: WandSparkles },
 ];
 
-export default function BottomActionDock({ onPhotos }) {
+export default function BottomActionDock({ onPhotos, onCreate, overlayMode = false }) {
   const [active, setActive] = useState(null);
   const [expanded, setExpanded] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => typeof window === 'undefined' ? 390 : window.innerWidth);
@@ -30,10 +31,23 @@ export default function BottomActionDock({ onPhotos }) {
   const tabsStripWidth = visibleTabCount * tabIconPitch;
   const dockWidth = !expanded ? 44 : active === 'tabs' ? tabsDockWidth : 220;
   const dockHeight = !expanded ? 44 : active === 'tabs' ? 68 : 78;
+  const collapsedDockBottom = viewportWidth < 768 ? 132 : 32;
+
+  const switchToTab = (id) => {
+    setSelectedTab(id);
+    void cppBridge.dispatch({ action: 'SWITCH_TAB', tabId: String(id) });
+  };
+
+  const persistTab = (id) => {
+    const tab = tabs.find((item) => item.id === id);
+    if (!tab) return;
+    void cppBridge.dispatch({ action: 'UPDATE_TAB', tabId: String(id), url: tab.url, title: tab.title });
+  };
 
   const choose = (id) => {
     setActive(id);
     if (id === 'photos') onPhotos();
+    if (id === 'create') onCreate?.();
   };
 
   const collapse = () => {
@@ -51,6 +65,48 @@ export default function BottomActionDock({ onPhotos }) {
     const updateViewportWidth = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', updateViewportWidth);
     return () => window.removeEventListener('resize', updateViewportWidth);
+  }, []);
+
+  useEffect(() => {
+    const nativeBridge = window.CppEngine;
+    if (typeof nativeBridge?.setDockHitRegion !== 'function') return undefined;
+
+    let frameId = 0;
+    const startedAt = performance.now();
+    const syncTouchRegion = () => {
+      if (!overlayMode) {
+        nativeBridge.setDockHitRegion(0, 0, 0, 0, false);
+        return;
+      }
+
+      const dock = document.querySelector('[aria-label="Bottom navigation"]');
+      if (!dock) return;
+      const rect = dock.getBoundingClientRect();
+      nativeBridge.setDockHitRegion(rect.left, rect.top, rect.right, rect.bottom, !expanded);
+
+      // Track the dock as it springs between the raised dot and its expanded position.
+      if (!expanded && performance.now() - startedAt < 700) {
+        frameId = window.requestAnimationFrame(syncTouchRegion);
+      }
+    };
+
+    syncTouchRegion();
+    return () => window.cancelAnimationFrame(frameId);
+  }, [overlayMode, expanded, active, tabs.length, viewportWidth]);
+
+  useEffect(() => {
+    const resetDockForPage = () => {
+      setExpanded(false);
+      setActive(null);
+      setTabDrawerOpen(false);
+      setLinkSearchOpen(false);
+    };
+    window.addEventListener('browser:show-dock-overlay', resetDockForPage);
+    window.addEventListener('browser:hide-dock-overlay', resetDockForPage);
+    return () => {
+      window.removeEventListener('browser:show-dock-overlay', resetDockForPage);
+      window.removeEventListener('browser:hide-dock-overlay', resetDockForPage);
+    };
   }, []);
 
   useEffect(() => {
@@ -80,6 +136,8 @@ export default function BottomActionDock({ onPhotos }) {
     const nextTab = { id, title: domain || `Tab ${tabs.length + 1}`, url: normalizedUrl, domain };
     setTabs((items) => [...items, nextTab]);
     setSelectedTab(id);
+    void cppBridge.dispatch({ action: 'CREATE_TAB', tabId: String(id), url: normalizedUrl, title: nextTab.title });
+    void cppBridge.dispatch({ action: 'SWITCH_TAB', tabId: String(id) });
     setTabDrawerOpen(false);
     setLinkSearchOpen(false);
     setLinkInput('');
@@ -90,10 +148,13 @@ export default function BottomActionDock({ onPhotos }) {
     const closedIndex = tabs.findIndex((tab) => tab.id === id);
     const remainingTabs = tabs.filter((tab) => tab.id !== id);
     setTabs(remainingTabs);
+    void cppBridge.dispatch({ action: 'CLOSE_TAB', tabId: String(id) });
     if (selectedTab === id) {
-      setSelectedTab(remainingTabs.length
+      const nextSelectedId = remainingTabs.length
         ? remainingTabs[Math.min(closedIndex, remainingTabs.length - 1)].id
-        : null);
+        : null;
+      setSelectedTab(nextSelectedId);
+      if (nextSelectedId !== null) void cppBridge.dispatch({ action: 'SWITCH_TAB', tabId: String(nextSelectedId) });
     }
   };
 
@@ -173,10 +234,17 @@ export default function BottomActionDock({ onPhotos }) {
       <motion.nav
         layout
         aria-label="Bottom navigation"
-        initial={{ opacity: 1, y: 30, scale: 0.96, width: 44, height: 44 }}
-        animate={{ opacity: 1, y: 0, scale: 1, width: dockWidth, height: dockHeight }}
+        initial={{ opacity: 1, y: 30, scale: 0.96, width: 44, height: 44, bottom: `${collapsedDockBottom}px` }}
+        animate={{
+          opacity: 1,
+          y: 0,
+          scale: 1,
+          width: dockWidth,
+          height: dockHeight,
+          bottom: `${expanded ? 32 : collapsedDockBottom}px`,
+        }}
         transition={{ type: 'spring', stiffness: 230, damping: 28, mass: 0.8 }}
-        className="mosaic-glass fixed bottom-4 left-0 right-0 z-40 mx-auto flex max-w-[90vw] items-center justify-center overflow-hidden rounded-full p-1.5 shadow-[0_12px_32px_rgba(42,53,81,0.13),inset_0_1px_0_rgba(255,255,255,0.85)]"
+        className="mosaic-glass fixed bottom-0 left-0 right-0 z-40 mx-auto flex max-w-[90vw] items-center justify-center overflow-hidden rounded-full p-1.5 shadow-[0_12px_32px_rgba(42,53,81,0.13),inset_0_1px_0_rgba(255,255,255,0.85)]"
       >
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/35 via-white/5 to-sky-100/15" />
         <motion.div
@@ -245,7 +313,7 @@ export default function BottomActionDock({ onPhotos }) {
                         title={tab.title}
                         aria-label={`Switch to ${tab.title}`}
                         aria-pressed={selectedTab === tab.id}
-                        onClick={() => setSelectedTab(tab.id)}
+                        onClick={() => switchToTab(tab.id)}
                         className={`mosaic-glass-control flex h-full w-full items-center justify-center overflow-hidden rounded-full border border-white/75 ${selectedTab === tab.id ? 'bg-white/75 ring-1 ring-white/90' : ''}`}
                       >
                         {tab.domain ? (
@@ -425,6 +493,7 @@ export default function BottomActionDock({ onPhotos }) {
                         value={tab.title}
                         onFocus={() => setSelectedTab(tab.id)}
                         onChange={(event) => updateTab(tab.id, 'title', event.target.value)}
+                        onBlur={() => persistTab(tab.id)}
                         placeholder="Tab name"
                         className="w-full bg-transparent text-xs font-semibold text-slate-800 outline-none placeholder:text-slate-400"
                       />
@@ -433,6 +502,7 @@ export default function BottomActionDock({ onPhotos }) {
                         value={tab.url}
                         onFocus={() => setSelectedTab(tab.id)}
                         onChange={(event) => updateTab(tab.id, 'url', event.target.value)}
+                        onBlur={() => persistTab(tab.id)}
                         placeholder="Enter website link"
                         inputMode="url"
                         className="w-full bg-transparent text-[11px] text-slate-600 outline-none placeholder:text-slate-400"
@@ -479,7 +549,7 @@ export default function BottomActionDock({ onPhotos }) {
                       title={tab.url || tab.title}
                       aria-label={`Open ${tab.title}${tab.url ? `, ${tab.url}` : ''}`}
                       onClick={() => handleTabsClick(() => {
-                        setSelectedTab(tab.id);
+                        switchToTab(tab.id);
                         setTabDrawerOpen(false);
                       })}
                       className="flex min-w-0 flex-col items-center justify-start"
@@ -527,6 +597,7 @@ export default function BottomActionDock({ onPhotos }) {
                             <input
                               value={editingTab.title}
                               onChange={(event) => updateTab(editingTab.id, 'title', event.target.value)}
+                              onBlur={() => persistTab(editingTab.id)}
                               className="mt-1 w-full rounded-xl bg-white/65 px-3 py-2.5 text-sm text-slate-900 outline-none"
                               placeholder="Tab name"
                             />
@@ -536,6 +607,7 @@ export default function BottomActionDock({ onPhotos }) {
                             <input
                               value={editingTab.url}
                               onChange={(event) => updateTab(editingTab.id, 'url', event.target.value)}
+                              onBlur={() => persistTab(editingTab.id)}
                               className="mt-1 w-full rounded-xl bg-white/65 px-3 py-2.5 text-sm text-slate-900 outline-none"
                               placeholder="https://example.com"
                               inputMode="url"

@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.himanshu.browserapp'
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId 'com.himanshu.browserapp'
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17 -Wall -Wextra'
+            }
+        }
+    }
+
+    ndkVersion '27.1.12297006'
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.14.0'
+}
+
+def webDist = rootProject.projectDir.parentFile.toPath().resolve('dist').toFile()
+
+tasks.register('copyWebAssets', Sync) {
+    from(webDist)
+    into(layout.projectDirectory.dir('src/main/assets'))
+    doFirst {
+        if (!new File(webDist, 'index.html').isFile()) {
+            throw new GradleException("Web build not found at ${webDist}. Run npm run build first.")
+        }
+    }
+}
+
+tasks.named('preBuild').configure {
+    dependsOn('copyWebAssets')
+}

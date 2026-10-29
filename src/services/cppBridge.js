@@ -26,6 +26,27 @@ class CppBridgeService {
     return typeof window !== 'undefined' && Boolean(window.CppEngine);
   }
 
+  async dispatch(payload = {}) {
+    if (this.isAvailable() && typeof window.CppEngine.dispatch === 'function') {
+      try {
+        const encodedPayload = typeof payload === 'string' ? payload : JSON.stringify(payload);
+        const response = window.CppEngine.dispatch(encodedPayload);
+        const data = typeof response === 'string' ? JSON.parse(response) : response;
+        return { success: true, data, native: true };
+      } catch (error) {
+        console.error('[CppBridge] Native dispatch failed:', error);
+        return { success: false, error: error.message, native: true };
+      }
+    }
+
+    return {
+      success: true,
+      native: false,
+      mock: true,
+      data: { ack: true, status: 'EXECUTED_DEV_MOCK', payload },
+    };
+  }
+
   triggerHaptic(pattern = 'selection') {
     if (this.isAvailable()) {
       try {
@@ -59,9 +80,12 @@ class CppBridgeService {
 
     if (this.isAvailable()) {
       try {
-        const response = window.CppEngine.executeIpcCommand(command, JSON.stringify(payload));
+        const response = window.CppEngine.dispatch(JSON.stringify({ command, payload }));
         const data = typeof response === 'string' ? JSON.parse(response) : response;
         const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        if (data?.accepted === false) {
+          return { success: false, error: `Native command '${command}' was not accepted`, data, native: true };
+        }
         return { success: true, data, latency: (endedAt - startedAt).toFixed(2), native: true };
       } catch (error) {
         console.error(`[CppBridge] IPC command '${command}' failed:`, error);
@@ -94,7 +118,7 @@ class CppBridgeService {
 
   async injectPromptToWebview(targetModel, promptText) {
     this.triggerHaptic('medium');
-    return this.sendIpcCommand('INJECT_DOM_PROMPT', {
+    return this.sendIpcCommand('INJECT_PROMPT', {
       target: targetModel,
       prompt: promptText,
       autoSubmit: true,
